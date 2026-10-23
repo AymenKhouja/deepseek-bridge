@@ -47,6 +47,17 @@ export const MAX_REMEMBERED_CHATS = 200;
 export const NAVIGATION_TIMEOUT_MS = 30_000;
 
 /**
+ * Typed into the chat when a reply tried to call a tool but nothing in it
+ * parsed (see FinishStream), so the model re-sends the call in a clean format
+ * instead of the client receiving broken markup as a final answer.
+ */
+export const TOOL_REPAIR_PROMPT = [
+  'Your last reply tried to call a tool, but the call was malformed and could not be run.',
+  'Re-send the same tool call(s) now, one tag per call, in exactly this format and nothing else:',
+  '<tool_call>{"name": "TOOL_NAME", "arguments": {"ARG": "VALUE"}}</tool_call>',
+].join('\n');
+
+/**
  * How long after typing a prompt DeepSeek must start replying. Past this the
  * bridge presses Enter again once; past twice this it fails the request
  * (and reloads the chat next time) instead of letting the client wait forever.

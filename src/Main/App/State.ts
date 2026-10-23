@@ -82,4 +82,7 @@ export const State = {
 
   /** Reload the next chat even if the window already shows it (set after DeepSeek ignored a prompt). */
   forceReload: false,
+
+  /** Whether the in-flight request already asked DeepSeek to re-send a malformed tool call (only once per request). */
+  repairTried: false,
 };

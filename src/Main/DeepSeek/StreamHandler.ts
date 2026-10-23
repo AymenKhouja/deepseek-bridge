@@ -1,7 +1,8 @@
 import { ParsedContent } from '../../Shared/Types';
-import { ParseToolCalls } from './ToolParser';
+import { HasDsml, ParseToolCalls } from './ToolParser';
 import { State } from '../App/State';
-import { ProcessQueue } from '../Server/RequestQueue';
+import { ProcessQueue, TypePrompt } from '../Server/RequestQueue';
+import { TOOL_REPAIR_PROMPT } from '../App/Constants';
 import { KeyFor, RememberChat, ReplyFingerprint } from './ChatRouter';
 
 /**
@@ -71,7 +72,7 @@ export function EmitThinking(text: string): void {
  * Flush buffered response text to the client.
  *
  * Called every 50ms by the chunk interval timer. Stops at the first
- * opening angle bracket followed by a letter/underscore or `｜` (potential
+ * opening angle bracket followed by a letter/underscore or a `｜`/`|` bar (potential
  * XML or DSML tool tag), so tool calls never leak into delta.content.
  *
  * Thinking text is emitted immediately on arrival (bridge:thinking handler)
@@ -82,11 +83,19 @@ export function FlushStream(): void {
   if (!State.currentStreamRes || State.streamDone) return;
   if (State.streamBuffer.length === 0) return;
   let emit = State.streamBuffer;
-  const tagStart = /<[a-zA-Z_｜]/.exec(emit);
+  const tagStart = /<[a-zA-Z_｜|]/.exec(emit);
   if (tagStart) emit = emit.slice(0, tagStart.index);
   if (emit.length === 0) return;
   State.streamBuffer = State.streamBuffer.slice(emit.length);
   EmitContent(emit);
+}
+
+/**
+ * Whether a reply contains tool-call markup (DSML or `<tool_call>`), i.e. the
+ * model meant to call a tool, whether or not the call parsed.
+ */
+function LooksLikeToolCall(text: string): boolean {
+  return HasDsml(text) || text.includes('<tool_call>');
 }
 
 /**
@@ -144,6 +153,21 @@ export function FinishStream(error?: string): void {
         content: '',
       };
     }
+  }
+
+  if (parsed.toolCalls.length === 0 && !State.repairTried && LooksLikeToolCall(State.fullResponseText)) {
+    // The model tried to call a tool but nothing parsed. Handing that to the
+    // client would end its turn on broken markup, so ask once, in the same
+    // chat, for the call again in the <tool_call> format; this request stays
+    // open and the corrected reply finishes it.
+    console.log('[bridge] malformed tool call, asking DeepSeek to re-send it');
+    State.repairTried = true;
+    State.streamDone = false;
+    State.responseInProgress = true;
+    State.fullResponseText = '';
+    State.streamBuffer = '';
+    TypePrompt(TOOL_REPAIR_PROMPT);
+    return;
   }
 
   if (parsed.toolCalls.length > 0) {

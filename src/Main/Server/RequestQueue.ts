@@ -82,6 +82,7 @@ export function ProcessQueue(): void {
   State.streamDone = false;
   State.streamStarted = false;
   State.activeXhrSeq = -1; // ignore events from earlier streams, e.g. one aborted or cut off by a page load
+  State.repairTried = false;
   State.responseInProgress = true;
 
   res.setHeader('Content-Type', 'text/event-stream');
@@ -91,23 +92,9 @@ export function ProcessQueue(): void {
   res.flushHeaders();
 
   const request = State.pendingRequest;
-  const stillWaiting = () => State.pendingRequest === request && !State.streamStarted && !State.streamDone;
   const send = () => {
     if (State.pendingRequest !== request) return; // cancelled while the chat was loading
-    if (!State.deepseekWindow || State.deepseekWindow.isDestroyed()) return;
-    State.streamStarted = false;
-    State.activeXhrSeq = -1;
-    State.deepseekWindow.webContents.send('bridge:send-prompt', userText);
-    setTimeout(() => {
-      if (!stillWaiting()) return;
-      console.log('[bridge] DeepSeek has not started replying, pressing Enter again');
-      State.deepseekWindow?.webContents.send('bridge:resubmit');
-      setTimeout(() => {
-        if (!stillWaiting()) return;
-        State.forceReload = true;
-        FinishStream(`DeepSeek did not accept the prompt within ${(2 * SUBMIT_TIMEOUT_MS) / 1000}s; try again`);
-      }, SUBMIT_TIMEOUT_MS);
-    }, SUBMIT_TIMEOUT_MS);
+    TypePrompt(userText);
   };
   const delay = built.kind === 'continuation' ? NextToolDelay() : 0;
   if (delay) console.log(`[bridge] tool-result delay ${delay}ms`);
@@ -118,6 +105,34 @@ export function ProcessQueue(): void {
   OpenChat(target)
     .then(() => setTimeout(send, delay))
     .catch((err: Error) => FinishStream(err.message));
+}
+
+/**
+ * Type a prompt for the in-flight request into DeepSeek and watch that it goes out.
+ *
+ * If no reply stream has started SUBMIT_TIMEOUT_MS after typing, Enter is
+ * pressed again; after another SUBMIT_TIMEOUT_MS the request fails (and the
+ * next one reloads the chat) instead of letting the client wait forever.
+ *
+ * @param text - The prompt to type.
+ */
+export function TypePrompt(text: string): void {
+  const request = State.pendingRequest;
+  if (!request || !State.deepseekWindow || State.deepseekWindow.isDestroyed()) return;
+  const stillWaiting = () => State.pendingRequest === request && !State.streamStarted && !State.streamDone;
+  State.streamStarted = false;
+  State.activeXhrSeq = -1;
+  State.deepseekWindow.webContents.send('bridge:send-prompt', text);
+  setTimeout(() => {
+    if (!stillWaiting()) return;
+    console.log('[bridge] DeepSeek has not started replying, pressing Enter again');
+    State.deepseekWindow?.webContents.send('bridge:resubmit');
+    setTimeout(() => {
+      if (!stillWaiting()) return;
+      State.forceReload = true;
+      FinishStream(`DeepSeek did not accept the prompt within ${(2 * SUBMIT_TIMEOUT_MS) / 1000}s; try again`);
+    }, SUBMIT_TIMEOUT_MS);
+  }, SUBMIT_TIMEOUT_MS);
 }
 
 /**
