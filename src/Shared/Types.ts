@@ -56,8 +56,8 @@ export interface OpenAiFunctionCall {
 export interface OpenAiToolDef {
   /** Always 'function'. */
   type: 'function';
-  /** The function descriptor with at minimum a name. */
-  function: { name: string };
+  /** The function descriptor: a name, plus an optional description and JSON Schema parameters. */
+  function: { name: string; description?: string; parameters?: Record<string, unknown> };
   /** Alternative field for the tool name (some clients send it here). */
   name?: string;
 }

@@ -1,5 +1,42 @@
-import { OpenAiMessage, OpenAiFunctionCall, BuiltPrompt } from '../../Shared/Types';
+import { OpenAiMessage, OpenAiFunctionCall, OpenAiToolDef, BuiltPrompt } from '../../Shared/Types';
 import { MAX_TOOL_RESULT_BYTES } from '../App/Constants';
+
+/**
+ * Describe the request's tools to the model in plain text.
+ *
+ * The real OpenAI API shows the `tools` array to the model server-side. The
+ * DeepSeek web UI has no such field, so the bridge must type the tool list
+ * into the prompt itself, along with the `<tool_call>` format ParseToolCalls
+ * understands. The JSON shape works for any tool name, unlike bare tags.
+ *
+ * @param tools - Tool definitions from the request, or null.
+ * @returns The tool instructions, or '' when there are no tools.
+ *
+ * @example
+ * FormatToolDefs([{ type: 'function', function: { name: 'get_weather', description: 'Weather for a city' } }])
+ * // => 'You have access to these tools:\n\n- get_weather: Weather for a city\n...'
+ */
+export function FormatToolDefs(tools: OpenAiToolDef[] | null): string {
+  if (!Array.isArray(tools) || tools.length === 0) return '';
+  const lines: string[] = [];
+  for (const tool of tools) {
+    const fn = tool.function || ({} as OpenAiToolDef['function']);
+    const name = fn.name || tool.name;
+    if (!name) continue;
+    let line = `- ${name}`;
+    if (fn.description) line += `: ${fn.description}`;
+    if (fn.parameters) line += `\n  Parameters (JSON Schema): ${JSON.stringify(fn.parameters)}`;
+    lines.push(line);
+  }
+  if (lines.length === 0) return '';
+  return [
+    'You have access to these tools:',
+    lines.join('\n'),
+    'To call a tool, reply with one tag per call in exactly this format, with the arguments as a JSON object matching the schema:',
+    '<tool_call>{"name": "TOOL_NAME", "arguments": {"ARG": "VALUE"}}</tool_call>',
+    'After the tag, stop and wait: the tool output will be sent to you in the next message. Only call tools from this list. If no tool is needed, answer in plain text with no tags.',
+  ].join('\n\n');
+}
 
 /**
  * Extract the plain text content from an OpenAI message.
@@ -56,7 +93,11 @@ function ContentOf(msg: OpenAiMessage): string {
  *   with no trailing tool result). Scan backward for the most recent user
  *   message and send that.
  *
+ * On user turns, the request's tool list (if any) is typed after the system
+ * prompts, so the model knows which tools exist and how to call them.
+ *
  * @param messages - Full array of OpenAI messages in chronological order.
+ * @param tools - Tool definitions from the request, or null.
  * @returns A BuiltPrompt with the text to type and a kind tag.
  *
  * @example
@@ -66,7 +107,7 @@ function ContentOf(msg: OpenAiMessage): string {
  * ])
  * // => { text: 'You are helpful.\n\nWhat is 2+2?', kind: 'fresh' }
  */
-export function BuildDeepSeekPrompt(messages: OpenAiMessage[]): BuiltPrompt {
+export function BuildDeepSeekPrompt(messages: OpenAiMessage[], tools: OpenAiToolDef[] | null = null): BuiltPrompt {
   const lastIdx = messages.length - 1;
   const last = messages[lastIdx] || ({} as OpenAiMessage);
   const lastRole = last.role || '';
@@ -117,6 +158,7 @@ export function BuildDeepSeekPrompt(messages: OpenAiMessage[]): BuiltPrompt {
         head.push(sys);
       }
     }
+    head.push(FormatToolDefs(tools));
     head.push(userText);
     const text = head.filter(p => p).join('\n\n');
     if (!hasAssistant && !hasTool) return { text, kind: 'fresh' };

@@ -55,7 +55,7 @@ export function ProcessQueue(): void {
     }
   }
 
-  const built = BuildDeepSeekPrompt(messages);
+  const built = BuildDeepSeekPrompt(messages, tools);
   const userText = built.text;
   if (!userText) {
     if (res.status) res.status(400).json({ error: 'empty' });
