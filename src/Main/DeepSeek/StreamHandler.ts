@@ -116,6 +116,7 @@ export function FinishStream(error?: string): void {
   let finishBranch = 'stop';
 
   if (error) {
+    console.log(`[bridge] request failed: ${error}`);
     EmitContent(`\n[Error: ${error}]`);
     WriteChunk({
       id: 'e', object: 'chat.completion.chunk', created: 0, model: 'deepseek-chat',

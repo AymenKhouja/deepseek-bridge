@@ -34,14 +34,26 @@ export const TOOL_NAMES: Record<string, number> = {
   tool_call: 1,
 };
 /**
- * How many conversation → DeepSeek chat mappings to keep in memory.
+ * How many conversation → DeepSeek chat mappings to keep.
  * The least recently used one is forgotten past this; its next turn then
- * stays in whatever chat is open, as if the bridge had restarted.
+ * stays in whatever chat is open.
  */
 export const MAX_REMEMBERED_CHATS = 200;
 
 /**
  * How long to wait for a DeepSeek chat page to load and become usable
- * before failing the request.
+ * before failing the request (covers all retries).
  */
 export const NAVIGATION_TIMEOUT_MS = 30_000;
+
+/** How many times to load a chat page before giving up, when loads fail (e.g. network blips). */
+export const NAVIGATION_ATTEMPTS = 3;
+
+/** Pause before retrying a failed chat page load. */
+export const NAVIGATION_RETRY_DELAY_MS = 2000;
+
+/**
+ * File name, inside Electron's userData folder, of the saved
+ * conversation → DeepSeek chat map. Keys are hashes, so it holds no prompt text.
+ */
+export const CHAT_MAP_FILE = 'chat-map.json';
