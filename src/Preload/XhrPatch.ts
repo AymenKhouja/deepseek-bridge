@@ -196,6 +196,7 @@ export function InstallXhrPatch(ipc: IpcRenderer): void {
 
             if (thinking) ipc.send('bridge:thinking', thinking);
             if (content) ipc.send('bridge:chunk', content);
+            if (process.env.BRIDGE_DEBUG) ipc.send('bridge:debug', `${currentEvent}|${activeFragmentType}|c=${content.length}|t=${thinking.length}|${payload.slice(0, 300)}`);
           } catch (_) { }
         }
       });

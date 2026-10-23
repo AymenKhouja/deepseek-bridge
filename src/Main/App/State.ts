@@ -14,7 +14,7 @@ import { QueuedRequest, StreamSink } from '../../Shared/Types';
  * - Stream: currentStreamRes, streamBuffer, streamTimer, streamDone,
  *           responseInProgress, fullResponseText, emittedContent, firstDelta
  * - Tools: currentAllowedTools, lastToolDelay
- * - Chats: currentChatKey, currentContextHash
+ * - Chats: currentChatKey, currentKeyBase, currentContextHash
  */
 export const State = {
   /** The request currently being processed, or null if idle. */
@@ -65,8 +65,11 @@ export const State = {
   /** The last tool-result delay used, so the next one won't repeat. */
   lastToolDelay: 0,
 
-  /** Conversation key of the in-flight request, so its chat URL can be saved when it finishes. */
+  /** Conversation key of the in-flight request, so its chat URL can be saved when it finishes. Null for new conversations. */
   currentChatKey: null as string | null,
+
+  /** First user message of the in-flight request (null for one-off requests), to key a new conversation once its first reply is known. */
+  currentKeyBase: null as string | null,
 
   /** Hash of the context the in-flight user turn leaves in its chat, or null for tool-result turns. */
   currentContextHash: null as string | null,

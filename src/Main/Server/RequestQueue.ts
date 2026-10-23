@@ -1,5 +1,6 @@
 import { BuildDeepSeekPrompt, ContextText } from '../DeepSeek/PromptBuilder';
-import { ContextAlreadySent, ContextHash, ConversationKey, OpenChat, TargetChatUrl } from '../DeepSeek/ChatRouter';
+import { ContextAlreadySent, ContextHash, ConversationKey, KeyBase, OpenChat, TargetChatUrl } from '../DeepSeek/ChatRouter';
+import { DEEPSEEK_URL } from '../App/Constants';
 import { FinishStream } from '../DeepSeek/StreamHandler';
 import { State } from '../App/State';
 
@@ -62,7 +63,7 @@ export function ProcessQueue(): void {
   const contextHash = ContextHash(ContextText(messages, tools));
   const contextSent = ContextAlreadySent(chatKey, contextHash, target);
 
-  const built = BuildDeepSeekPrompt(messages, tools, !contextSent);
+  const built = BuildDeepSeekPrompt(messages, tools, !contextSent, target === DEEPSEEK_URL);
   if (contextSent && built.kind === 'turn') console.log('[bridge] context unchanged, typing the new message only');
   const userText = built.text;
   if (!userText) {
@@ -96,9 +97,9 @@ export function ProcessQueue(): void {
   if (delay) console.log(`[bridge] tool-result delay ${delay}ms`);
 
   State.currentChatKey = chatKey;
-  State.currentContextHash = built.kind === 'fresh' || built.kind === 'turn' ? contextHash : null;
-  const opened = target ? OpenChat(target) : Promise.resolve();
-  opened
+  State.currentKeyBase = KeyBase(messages);
+  State.currentContextHash = ['fresh', 'turn', 'replay'].includes(built.kind) ? contextHash : null;
+  OpenChat(target)
     .then(() => setTimeout(send, delay))
     .catch((err: Error) => FinishStream(err.message));
 }

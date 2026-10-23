@@ -2,7 +2,7 @@ import { ParsedContent } from '../../Shared/Types';
 import { ParseToolCalls } from './ToolParser';
 import { State } from '../App/State';
 import { ProcessQueue } from '../Server/RequestQueue';
-import { RememberChat } from './ChatRouter';
+import { KeyFor, RememberChat, ReplyFingerprint } from './ChatRouter';
 
 /**
  * Write a single Server-Sent Events frame to the current HTTP response.
@@ -129,7 +129,7 @@ export function FinishStream(error?: string): void {
     return;
   }
 
-  let parsed: ParsedContent = ParseToolCalls(State.fullResponseText, State.currentAllowedTools);
+  let parsed: ParsedContent = ParseToolCalls(State.fullResponseText, State.currentAllowedTools, State.pendingRequest ? State.pendingRequest.tools : null);
 
   if (parsed.toolCalls.length === 0) {
     const bare = parsed.content.trim();
@@ -175,7 +175,11 @@ export function FinishStream(error?: string): void {
 
   console.log(`[bridge] finish=${finishBranch} fullLen=${State.fullResponseText.length} fullTail=${JSON.stringify(State.fullResponseText.slice(-60))} emittedLen=${State.emittedContent.length} emittedTail=${JSON.stringify(State.emittedContent.slice(-60))}`);
   try { State.currentStreamRes.write('data: [DONE]\n\n'); State.currentStreamRes.end(); } catch (_) { }
-  RememberChat(State.currentChatKey, State.currentContextHash);
+  let chatKey = State.currentChatKey;
+  if (!chatKey && State.currentKeyBase !== null) {
+    chatKey = KeyFor(State.currentKeyBase, ReplyFingerprint(parsed.toolCalls.map(tc => tc.id), State.emittedContent));
+  }
+  RememberChat(chatKey, State.currentContextHash);
   State.currentStreamRes = null;
   State.pendingRequest = null;
   setTimeout(() => ProcessQueue(), 500);

@@ -102,6 +102,47 @@ export function ContextText(messages: OpenAiMessage[], tools: OpenAiToolDef[] | 
 }
 
 /**
+ * Type an ongoing conversation into a new, empty chat as one transcript.
+ *
+ * Used when the bridge has no chat for a conversation that already has
+ * replies: it started on another model, or its chat was forgotten. Normal
+ * turns type only the newest message because the chat holds the rest;
+ * here the chat holds nothing, so everything is typed once.
+ *
+ * @param messages - Full array of OpenAI messages in chronological order.
+ * @param tools - Tool definitions from the request, or null.
+ * @returns The context, the transcript, and an instruction to continue.
+ */
+export function ReplayPrompt(messages: OpenAiMessage[], tools: OpenAiToolDef[] | null): string {
+  const lines: string[] = [];
+  for (const msg of messages) {
+    if (msg.role === 'user') {
+      lines.push(`User: ${ContentOf(msg)}`);
+    } else if (msg.role === 'assistant') {
+      const text = ContentOf(msg);
+      if (text) lines.push(`Assistant: ${text}`);
+      for (const tc of msg.tool_calls || []) {
+        lines.push(`Assistant called tool: ${tc.function.name}(${tc.function.arguments || ''})`);
+      }
+    } else if (msg.role === 'tool') {
+      let res = ContentOf(msg) || '(no output)';
+      if (Buffer.byteLength(res, 'utf8') > MAX_TOOL_RESULT_BYTES) res = '(result too large, omitted)';
+      lines.push(`Tool result: ${res}`);
+    }
+  }
+  const lastRole = messages[messages.length - 1].role;
+  const next = lastRole === 'tool'
+    ? 'Continue from the last tool result.'
+    : 'Reply to the last user message.';
+  return [
+    ContextText(messages, tools),
+    'This conversation started elsewhere. Here it is so far:',
+    lines.join('\n\n'),
+    `${next} If you need a tool, use the tool format described above.`,
+  ].filter(p => p).join('\n\n');
+}
+
+/**
  * Convert an array of OpenAI messages into a single string to type into DeepSeek.
  *
  * This is the central prompt assembly logic. It decides what to type based on
@@ -133,6 +174,8 @@ export function ContextText(messages: OpenAiMessage[], tools: OpenAiToolDef[] | 
  * @param tools - Tool definitions from the request, or null.
  * @param includeContext - Type the system prompts and tool list on user turns.
  *   False when this exact context is already in the DeepSeek chat (see ChatRouter).
+ * @param newChat - The prompt goes into a new, empty chat. An ongoing
+ *   conversation is then typed as a full transcript (see ReplayPrompt).
  * @returns A BuiltPrompt with the text to type and a kind tag.
  *
  * @example
@@ -146,6 +189,7 @@ export function BuildDeepSeekPrompt(
   messages: OpenAiMessage[],
   tools: OpenAiToolDef[] | null = null,
   includeContext = true,
+  newChat = false,
 ): BuiltPrompt {
   const lastIdx = messages.length - 1;
   const last = messages[lastIdx] || ({} as OpenAiMessage);
@@ -156,6 +200,10 @@ export function BuildDeepSeekPrompt(
   for (const msg of messages) {
     if (msg.role === 'assistant') hasAssistant = true;
     if (msg.role === 'tool') hasTool = true;
+  }
+
+  if (newChat && (hasAssistant || hasTool) && (lastRole === 'user' || lastRole === 'tool')) {
+    return { text: ReplayPrompt(messages, tools), kind: 'replay' };
   }
 
   if (lastRole === 'tool') {
