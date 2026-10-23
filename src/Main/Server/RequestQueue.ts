@@ -1,4 +1,6 @@
 import { BuildDeepSeekPrompt } from '../DeepSeek/PromptBuilder';
+import { ConversationKey, OpenChat, TargetChatUrl } from '../DeepSeek/ChatRouter';
+import { FinishStream } from '../DeepSeek/StreamHandler';
 import { State } from '../App/State';
 
 /**
@@ -79,17 +81,20 @@ export function ProcessQueue(): void {
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
 
-  if (built.kind === 'continuation') {
-    const delay = NextToolDelay();
-    console.log(`[bridge] tool-result delay ${delay}ms`);
-    setTimeout(() => {
-      if (State.deepseekWindow && !State.deepseekWindow.isDestroyed()) {
-        State.deepseekWindow.webContents.send('bridge:send-prompt', userText);
-      }
-    }, delay);
-  } else {
-    State.deepseekWindow!.webContents.send('bridge:send-prompt', userText);
-  }
+  const send = () => {
+    if (State.deepseekWindow && !State.deepseekWindow.isDestroyed()) {
+      State.deepseekWindow.webContents.send('bridge:send-prompt', userText);
+    }
+  };
+  const delay = built.kind === 'continuation' ? NextToolDelay() : 0;
+  if (delay) console.log(`[bridge] tool-result delay ${delay}ms`);
+
+  State.currentChatKey = ConversationKey(messages);
+  const target = TargetChatUrl(State.currentChatKey, messages);
+  const opened = target ? OpenChat(target) : Promise.resolve();
+  opened
+    .then(() => setTimeout(send, delay))
+    .catch((err: Error) => FinishStream(err.message));
 }
 
 /**

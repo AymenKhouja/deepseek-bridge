@@ -33,3 +33,15 @@ export const TOOL_NAMES: Record<string, number> = {
   task: 1, todo: 1, todowrite: 1, todoread: 1, question: 1, skill: 1, lsp: 1,
   tool_call: 1,
 };
+/**
+ * How many conversation → DeepSeek chat mappings to keep in memory.
+ * The least recently used one is forgotten past this; its next turn then
+ * stays in whatever chat is open, as if the bridge had restarted.
+ */
+export const MAX_REMEMBERED_CHATS = 200;
+
+/**
+ * How long to wait for a DeepSeek chat page to load and become usable
+ * before failing the request.
+ */
+export const NAVIGATION_TIMEOUT_MS = 30_000;

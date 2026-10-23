@@ -2,6 +2,19 @@ import { OpenAiMessage, OpenAiFunctionCall, OpenAiToolDef, BuiltPrompt } from '.
 import { MAX_TOOL_RESULT_BYTES } from '../App/Constants';
 
 /**
+ * Check whether a system prompt is OpenCode's session-title generator.
+ *
+ * Title requests are one-off side requests: their system prompt is not
+ * typed into DeepSeek, and they never claim a conversation's chat.
+ *
+ * @param sys - System prompt text.
+ * @returns true for the title-generator prompt.
+ */
+export function IsTitleGenerator(sys: string): boolean {
+  return sys.includes('title generator') && sys.includes('Generate a title');
+}
+
+/**
  * Describe the request's tools to the model in plain text.
  *
  * The real OpenAI API shows the `tools` array to the model server-side. The
@@ -55,7 +68,7 @@ export function FormatToolDefs(tools: OpenAiToolDef[] | null): string {
  * ContentOf({ role: 'user', content: [{ type: 'text', text: 'hi' }] })
  * // => 'hi'
  */
-function ContentOf(msg: OpenAiMessage): string {
+export function ContentOf(msg: OpenAiMessage): string {
   const c = msg.content;
   if (typeof c === 'string') return c;
   if (Array.isArray(c)) {
@@ -154,7 +167,7 @@ export function BuildDeepSeekPrompt(messages: OpenAiMessage[], tools: OpenAiTool
     for (const msg of messages) {
       if (msg.role !== 'system') continue;
       const sys = ContentOf(msg);
-      if (sys && !(sys.includes('title generator') && sys.includes('Generate a title'))) {
+      if (sys && !IsTitleGenerator(sys)) {
         head.push(sys);
       }
     }
