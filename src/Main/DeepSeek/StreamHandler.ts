@@ -70,8 +70,8 @@ export function EmitThinking(text: string): void {
  * Flush buffered response text to the client.
  *
  * Called every 50ms by the chunk interval timer. Stops at the first
- * opening angle bracket followed by a letter/underscore (potential
- * tool tag), so XML tool calls never leak into delta.content.
+ * opening angle bracket followed by a letter/underscore or `｜` (potential
+ * XML or DSML tool tag), so tool calls never leak into delta.content.
  *
  * Thinking text is emitted immediately on arrival (bridge:thinking handler)
  * rather than buffered, so it streams to OpenCode's thinking panel in
@@ -81,7 +81,7 @@ export function FlushStream(): void {
   if (!State.currentStreamRes || State.streamDone) return;
   if (State.streamBuffer.length === 0) return;
   let emit = State.streamBuffer;
-  const tagStart = /<[a-zA-Z_]/.exec(emit);
+  const tagStart = /<[a-zA-Z_｜]/.exec(emit);
   if (tagStart) emit = emit.slice(0, tagStart.index);
   if (emit.length === 0) return;
   State.streamBuffer = State.streamBuffer.slice(emit.length);

@@ -82,6 +82,72 @@ export function IsToolName(name: string, allowedSet: Set<string> | null): boolea
   return name in TOOL_NAMES;
 }
 
+/** `｜｜DSML｜｜ ` prefix inside DeepSeek's native tool-call tags (U+FF5C bars; ASCII `|` tolerated). */
+const DSML = '[｜|]+\\s*DSML\\s*[｜|]+\\s*';
+const DSML_INVOKE_RE = new RegExp(`<${DSML}invoke\\s+name="([^"]+)"\\s*>([\\s\\S]*?)</${DSML}invoke>`, 'g');
+const DSML_PARAM_RE = new RegExp(`<${DSML}parameter\\s+name="([^"]+)"(?:\\s+string="(true|false)")?\\s*>([\\s\\S]*?)</${DSML}parameter>`, 'g');
+const DSML_WRAPPER_RE = new RegExp(`</?${DSML}(?:function_)?calls>`, 'g');
+
+/**
+ * Parse DeepSeek's native DSML tool-call blocks from the model's response text.
+ *
+ * Even when told to use `<tool_call>`, DeepSeek sometimes falls back to the
+ * format it was trained on (OpenCode's prompt triggers it on the first turn):
+ *
+ *   <｜｜DSML｜｜ calls>
+ *   <｜｜DSML｜｜ invoke name="read">
+ *   <｜｜DSML｜｜ parameter name="filePath" string="true">calc.py</｜｜DSML｜｜ parameter>
+ *   </｜｜DSML｜｜ invoke>
+ *   </｜｜DSML｜｜ calls>
+ *
+ * `string="true"` values are taken verbatim; `string="false"` values are JSON
+ * (numbers, booleans, objects). A lone `arguments` parameter holding a JSON
+ * object is unwrapped, since DeepSeek also emits that shape.
+ *
+ * @param text - The full accumulated response text from the model.
+ * @param allowedSet - Request-level allowed tool names, or null.
+ * @param firstIndex - Index to give the first call (after any XML-tag calls).
+ * @returns The parsed tool calls and the raw invoke blocks they came from.
+ */
+function ParseDsmlCalls(text: string, allowedSet: Set<string> | null, firstIndex: number): { toolCalls: ParsedToolCall[]; matched: string[] } {
+  const toolCalls: ParsedToolCall[] = [];
+  const matched: string[] = [];
+  let id = firstIndex;
+  let m: RegExpExecArray | null;
+  DSML_INVOKE_RE.lastIndex = 0;
+  while ((m = DSML_INVOKE_RE.exec(text)) !== null) {
+    const fnName = m[1].toLowerCase();
+    if (!IsToolName(fnName, allowedSet)) continue;
+    let fnArgs: Record<string, unknown> = {};
+    let p: RegExpExecArray | null;
+    DSML_PARAM_RE.lastIndex = 0;
+    while ((p = DSML_PARAM_RE.exec(m[2])) !== null) {
+      let value: unknown = p[3];
+      if (p[2] === 'false') {
+        try { value = JSON.parse(p[3]); } catch (_) { }
+      }
+      fnArgs[p[1]] = value;
+    }
+    const keys = Object.keys(fnArgs);
+    if (keys.length === 1 && keys[0] === 'arguments') {
+      let inner = fnArgs.arguments;
+      if (typeof inner === 'string') {
+        try { inner = JSON.parse(inner); } catch (_) { }
+      }
+      if (inner && typeof inner === 'object' && !Array.isArray(inner)) fnArgs = inner as Record<string, unknown>;
+    }
+    toolCalls.push({
+      index: id,
+      id: `call_${Date.now()}_${id}`,
+      type: 'function',
+      function: { name: fnName, arguments: JSON.stringify(fnArgs) },
+    });
+    matched.push(m[0]);
+    id++;
+  }
+  return { toolCalls, matched };
+}
+
 /**
  * Parse XML-style tool call tags from the model's full response text.
  *
@@ -96,6 +162,8 @@ export function IsToolName(name: string, allowedSet: Set<string> | null): boolea
  * - `{"type": "bash", "command": "..."}`  (type field)
  * - `{"name": "bash", "command": "..."}`  (name field)
  * - `{"type": "bash", "arguments": {"command": "..."}}`  (nested arguments)
+ *
+ * DeepSeek's native DSML blocks are parsed too (see ParseDsmlCalls).
  *
  * @param text - The full accumulated response text from the model.
  * @param allowedSet - Request-level allowed tool names, or null.
@@ -152,10 +220,14 @@ export function ParseToolCalls(text: string, allowedSet: Set<string> | null): Pa
     matched.push(m[0]);
     id++;
   }
+  const dsml = ParseDsmlCalls(text, allowedSet, id);
+  toolCalls.push(...dsml.toolCalls);
+  matched.push(...dsml.matched);
   let cleaned = text;
   for (const match of matched) {
     cleaned = cleaned.split(match).join('');
   }
+  if (dsml.toolCalls.length > 0) cleaned = cleaned.replace(DSML_WRAPPER_RE, '');
   cleaned = cleaned.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
   return { toolCalls, content: cleaned };
 }
