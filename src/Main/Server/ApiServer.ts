@@ -2,7 +2,7 @@ import * as express from 'express';
 import { StreamSink } from '../../Shared/Types';
 import { PORT } from '../App/Constants';
 import { State } from '../App/State';
-import { EnqueueRequest } from './RequestQueue';
+import { CancelRequest, EnqueueRequest } from './RequestQueue';
 
 /**
  * Start the Express HTTP API server on 127.0.0.1:PORT.
@@ -38,6 +38,7 @@ export function StartServer(): void {
 
     const rid = ++State.requestIdSeq;
     const tools = req.body.tools || null;
+    res.on('close', () => { if (!res.writableFinished) CancelRequest(rid); });
 
     if (req.body.stream) {
       EnqueueRequest({ id: rid, messages: req.body.messages, tools, res });

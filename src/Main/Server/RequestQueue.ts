@@ -80,6 +80,8 @@ export function ProcessQueue(): void {
   State.emittedContent = '';
   State.firstDelta = true;
   State.streamDone = false;
+  State.streamStarted = false;
+  State.activeXhrSeq = -1; // ignore events from earlier streams, e.g. one aborted or cut off by a page load
   State.responseInProgress = true;
 
   res.setHeader('Content-Type', 'text/event-stream');
@@ -91,8 +93,10 @@ export function ProcessQueue(): void {
   const request = State.pendingRequest;
   const stillWaiting = () => State.pendingRequest === request && !State.streamStarted && !State.streamDone;
   const send = () => {
+    if (State.pendingRequest !== request) return; // cancelled while the chat was loading
     if (!State.deepseekWindow || State.deepseekWindow.isDestroyed()) return;
     State.streamStarted = false;
+    State.activeXhrSeq = -1;
     State.deepseekWindow.webContents.send('bridge:send-prompt', userText);
     setTimeout(() => {
       if (!stillWaiting()) return;
@@ -114,6 +118,28 @@ export function ProcessQueue(): void {
   OpenChat(target)
     .then(() => setTimeout(send, delay))
     .catch((err: Error) => FinishStream(err.message));
+}
+
+/**
+ * Cancel a request whose client disconnected (e.g. the user interrupted OpenCode).
+ *
+ * A queued request is dropped. The in-flight one has DeepSeek's reply
+ * aborted and is finished at once, so the client's retry runs next instead
+ * of waiting behind a reply nobody will read.
+ *
+ * @param id - The request's ID.
+ */
+export function CancelRequest(id: number): void {
+  const queued = State.requestQueue.findIndex(r => r.id === id);
+  if (queued !== -1) {
+    State.requestQueue.splice(queued, 1);
+    console.log(`[bridge] client left, dropped queued request ${id}`);
+    return;
+  }
+  if (!State.pendingRequest || State.pendingRequest.id !== id) return;
+  console.log(`[bridge] client left, stopping request ${id}`);
+  if (State.deepseekWindow && !State.deepseekWindow.isDestroyed()) State.deepseekWindow.webContents.send('bridge:stop');
+  FinishStream('client disconnected');
 }
 
 /**

@@ -47,6 +47,9 @@ export const State = {
   /** Whether DeepSeek started a reply stream for the in-flight prompt (see the submit watchdog in RequestQueue). */
   streamStarted: false,
 
+  /** Number of the reply stream belonging to the in-flight request; events from other streams (e.g. an aborted one) are ignored. -1 until it starts. */
+  activeXhrSeq: -1,
+
   /** Whether a response is actively being streamed to the client. */
   responseInProgress: false,
 

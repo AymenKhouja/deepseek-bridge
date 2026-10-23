@@ -1,5 +1,5 @@
 import { ipcRenderer } from 'electron';
-import { InstallXhrPatch } from './XhrPatch';
+import { AbortActiveChat, InstallXhrPatch } from './XhrPatch';
 import { ResubmitPrompt, SendPrompt, WaitForReady } from './DeepSeekUi';
 
 /**
@@ -26,6 +26,8 @@ ipcRenderer.on('bridge:send-prompt', (_event, text: string) => {
 });
 
 ipcRenderer.on('bridge:resubmit', () => ResubmitPrompt());
+
+ipcRenderer.on('bridge:stop', () => AbortActiveChat());
 
 window.addEventListener('load', () => {
   setTimeout(() => WaitForReady(ipcRenderer), 2000);
