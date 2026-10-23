@@ -16,6 +16,12 @@ import { ContentOf } from './PromptBuilder';
  */
 let chatUrls: Map<string, string> | null = null;
 
+/**
+ * Conversation key → the context (system prompts + tools) last typed into its chat.
+ * In memory only: after a restart the context is simply sent once more.
+ */
+const sentContext = new Map<string, { hash: string; url: string }>();
+
 /** Where the map is saved: next to the login session in Electron's userData folder. */
 function ChatMapPath(): string {
   return path.join(app.getPath('userData'), CHAT_MAP_FILE);
@@ -149,18 +155,51 @@ export function OpenChat(url: string): Promise<void> {
 }
 
 /**
+ * Hash the context (system prompts + tool list) a user turn would type.
+ *
+ * @param context - From ContextText.
+ * @returns A hex digest, or null when there is no context to send.
+ */
+export function ContextHash(context: string): string | null {
+  return context ? createHash('sha1').update(context).digest('hex') : null;
+}
+
+/**
+ * Check whether a DeepSeek chat already holds this exact context, so a user
+ * turn can type just the new message instead of re-typing the whole system
+ * prompt and tool list (the web thread only appends; it can't replace).
+ *
+ * @param key - From ConversationKey.
+ * @param hash - From ContextHash.
+ * @param target - From TargetChatUrl: the chat about to be typed into, or null for the current one.
+ * @returns true when the context can be skipped.
+ */
+export function ContextAlreadySent(key: string | null, hash: string | null, target: string | null): boolean {
+  if (!key || !hash) return false;
+  const win = State.deepseekWindow;
+  const url = target ?? (win && !win.isDestroyed() ? win.webContents.getURL() : '');
+  if (!url || url === DEEPSEEK_URL) return false;
+  const sent = sentContext.get(key);
+  return !!sent && sent.hash === hash && sent.url === url;
+}
+
+/**
  * Save the chat the current request was answered in under its conversation key.
  *
  * Called when a response finishes: by then DeepSeek has moved a new chat
- * from the bare root URL to its own `/a/chat/s/<id>` URL.
+ * from the bare root URL to its own `/a/chat/s/<id>` URL. Also records the
+ * context that chat now holds, when the request was a user turn.
  *
  * @param key - The finished request's conversation key, or null.
+ * @param contextHash - Hash of the context the chat holds after a user turn, or null.
  */
-export function RememberChat(key: string | null): void {
+export function RememberChat(key: string | null, contextHash: string | null): void {
   const win = State.deepseekWindow;
   if (!key || !win || win.isDestroyed()) return;
   const url = win.webContents.getURL();
   if (!url.includes('/chat/s/')) return;
+  if (contextHash) sentContext.set(key, { hash: contextHash, url });
+  if (sentContext.size > MAX_REMEMBERED_CHATS) sentContext.delete(sentContext.keys().next().value!);
   const urls = ChatUrls();
   if (urls.get(key) === url && [...urls.keys()].pop() === key) return;
   urls.delete(key);

@@ -83,6 +83,25 @@ export function ContentOf(msg: OpenAiMessage): string {
 }
 
 /**
+ * Build the context typed before a user message: the system prompts (minus
+ * OpenCode's title-generator prompt) followed by the tool list.
+ *
+ * @param messages - Full array of OpenAI messages in chronological order.
+ * @param tools - Tool definitions from the request, or null.
+ * @returns The context text, or '' when there is none.
+ */
+export function ContextText(messages: OpenAiMessage[], tools: OpenAiToolDef[] | null): string {
+  const parts: string[] = [];
+  for (const msg of messages) {
+    if (msg.role !== 'system') continue;
+    const sys = ContentOf(msg);
+    if (sys && !IsTitleGenerator(sys)) parts.push(sys);
+  }
+  parts.push(FormatToolDefs(tools));
+  return parts.filter(p => p).join('\n\n');
+}
+
+/**
  * Convert an array of OpenAI messages into a single string to type into DeepSeek.
  *
  * This is the central prompt assembly logic. It decides what to type based on
@@ -100,7 +119,8 @@ export function ContentOf(msg: OpenAiMessage): string {
  *
  * - **last = user, ongoing**: The web thread already holds the conversation
  *   history. Type the current system prompts (which may have been updated
- *   by agentic IDEs like Cursor or Cline) followed by the new user question.
+ *   by agentic IDEs like Cursor or Cline) followed by the new user question,
+ *   or just the question when includeContext is false.
  *
  * - **fallback**: The last message is something unexpected (e.g., assistant
  *   with no trailing tool result). Scan backward for the most recent user
@@ -111,6 +131,8 @@ export function ContentOf(msg: OpenAiMessage): string {
  *
  * @param messages - Full array of OpenAI messages in chronological order.
  * @param tools - Tool definitions from the request, or null.
+ * @param includeContext - Type the system prompts and tool list on user turns.
+ *   False when this exact context is already in the DeepSeek chat (see ChatRouter).
  * @returns A BuiltPrompt with the text to type and a kind tag.
  *
  * @example
@@ -120,7 +142,11 @@ export function ContentOf(msg: OpenAiMessage): string {
  * ])
  * // => { text: 'You are helpful.\n\nWhat is 2+2?', kind: 'fresh' }
  */
-export function BuildDeepSeekPrompt(messages: OpenAiMessage[], tools: OpenAiToolDef[] | null = null): BuiltPrompt {
+export function BuildDeepSeekPrompt(
+  messages: OpenAiMessage[],
+  tools: OpenAiToolDef[] | null = null,
+  includeContext = true,
+): BuiltPrompt {
   const lastIdx = messages.length - 1;
   const last = messages[lastIdx] || ({} as OpenAiMessage);
   const lastRole = last.role || '';
@@ -163,15 +189,7 @@ export function BuildDeepSeekPrompt(messages: OpenAiMessage[], tools: OpenAiTool
 
   if (lastRole === 'user') {
     const userText = ContentOf(last);
-    const head: string[] = [];
-    for (const msg of messages) {
-      if (msg.role !== 'system') continue;
-      const sys = ContentOf(msg);
-      if (sys && !IsTitleGenerator(sys)) {
-        head.push(sys);
-      }
-    }
-    head.push(FormatToolDefs(tools));
+    const head = includeContext ? [ContextText(messages, tools)] : [];
     head.push(userText);
     const text = head.filter(p => p).join('\n\n');
     if (!hasAssistant && !hasTool) return { text, kind: 'fresh' };

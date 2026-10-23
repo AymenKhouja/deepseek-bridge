@@ -175,7 +175,7 @@ export function FinishStream(error?: string): void {
 
   console.log(`[bridge] finish=${finishBranch} fullLen=${State.fullResponseText.length} fullTail=${JSON.stringify(State.fullResponseText.slice(-60))} emittedLen=${State.emittedContent.length} emittedTail=${JSON.stringify(State.emittedContent.slice(-60))}`);
   try { State.currentStreamRes.write('data: [DONE]\n\n'); State.currentStreamRes.end(); } catch (_) { }
-  RememberChat(State.currentChatKey);
+  RememberChat(State.currentChatKey, State.currentContextHash);
   State.currentStreamRes = null;
   State.pendingRequest = null;
   setTimeout(() => ProcessQueue(), 500);
