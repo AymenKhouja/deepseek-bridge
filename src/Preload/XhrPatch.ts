@@ -118,6 +118,7 @@ export function InstallXhrPatch(ipc: IpcRenderer): void {
       activeFragmentType = 'RESPONSE';
       currentEvent = '';
       console.log('[xhr-patch] send on chat URL, adding listeners');
+      ipc.send('bridge:started');
 
       xhr.addEventListener('progress', () => {
         const raw = xhr.responseText || '';

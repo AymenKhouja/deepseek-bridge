@@ -108,6 +108,7 @@ export function RegisterIpcHandlers(): void {
 
   ipcMain.on('bridge:done', () => { FinishStream(); });
   ipcMain.on('bridge:error', (_e, err: string) => { FinishStream(err); });
+  ipcMain.on('bridge:started', () => { State.streamStarted = true; });
   ipcMain.on('bridge:debug', (_e, line: string) => { console.log(`[bridge:debug] ${line}`); });
   ipcMain.on('bridge:diag', (_e, d: { rawLen: number; rawTail: string }) => {
     console.log(`[bridge:diag] rawLen=${d && d.rawLen} rawTail=${JSON.stringify(d && d.rawTail)}`);

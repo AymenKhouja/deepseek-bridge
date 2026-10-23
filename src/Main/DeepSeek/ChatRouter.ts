@@ -156,7 +156,8 @@ export function TargetChatUrl(key: string | null, messages: OpenAiMessage[]): st
 export function OpenChat(url: string): Promise<void> {
   const win = State.deepseekWindow;
   if (!win || win.isDestroyed()) return Promise.reject(new Error('DeepSeek window is gone'));
-  if (url !== DEEPSEEK_URL && win.webContents.getURL() === url) return Promise.resolve();
+  if (url !== DEEPSEEK_URL && win.webContents.getURL() === url && !State.forceReload) return Promise.resolve();
+  State.forceReload = false;
   return new Promise((resolve, reject) => {
     let attempts = 1;
     const cleanup = () => {

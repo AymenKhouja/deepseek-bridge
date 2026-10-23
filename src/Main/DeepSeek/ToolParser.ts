@@ -85,11 +85,14 @@ export function IsToolName(name: string, allowedSet: Set<string> | null): boolea
 /** `｜｜DSML｜｜ ` prefix inside DeepSeek's native tool-call tags (U+FF5C bars; ASCII `|` tolerated). */
 const DSML = '[｜|]+\\s*DSML\\s*[｜|]+\\s*';
 const DSML_INVOKE_RE = new RegExp(`<${DSML}invoke\\s+name="([^"]+)"\\s*>([\\s\\S]*?)</${DSML}invoke>`, 'g');
-const DSML_PARAM_RE = new RegExp(`<${DSML}parameter\\s+name="([^"]+)"(?:\\s+string="(true|false)")?\\s*>([\\s\\S]*?)</${DSML}parameter>`, 'g');
-const DSML_PARAM_LENIENT_RE = new RegExp(`<${DSML}parameter\\s+name="([^"]+)"(?:\\s+string="(true|false)")?\\s*>([\\s\\S]*?)</${DSML}parameter(?:>|$)`, 'g');
+/** A parameter value: any text up to the closing tag, but never across another parameter's opening tag. */
+const DSML_VALUE = `((?:(?!<${DSML}parameter\\s)[\\s\\S])*?)`;
+const DSML_PARAM_RE = new RegExp(`<${DSML}parameter\\s+name="([^"]+)"(?:\\s+string="(true|false)")?\\s*>${DSML_VALUE}</${DSML}parameter>`, 'g');
+const DSML_PARAM_LENIENT_RE = new RegExp(`<${DSML}parameter\\s+name="([^"]+)"(?:\\s+string="(true|false)")?\\s*>${DSML_VALUE}</${DSML}parameter(?:>|$)`, 'g');
 const DSML_INVOKE_CLOSE_RE = new RegExp(`</${DSML}invoke>`);
 const DSML_INVOKE_OPEN_RE = new RegExp(`<${DSML}invoke\\s`);
-const DSML_STRAY_RE = new RegExp(`</?${DSML}(?:function_)?calls>|</${DSML}invoke>`, 'g');
+/** DSML tags left over once the calls are parsed: wrappers, closers, and empty parameter tags DeepSeek sometimes emits. */
+const DSML_STRAY_RE = new RegExp(`</?${DSML}(?:function_)?calls>|</${DSML}invoke>|<${DSML}parameter\\s[^>]*>`, 'g');
 
 /**
  * Read DSML parameter tags into an arguments object.

@@ -44,6 +44,9 @@ export const State = {
   /** Whether the current stream has been finalized (stop, error, or tool_calls). */
   streamDone: false,
 
+  /** Whether DeepSeek started a reply stream for the in-flight prompt (see the submit watchdog in RequestQueue). */
+  streamStarted: false,
+
   /** Whether a response is actively being streamed to the client. */
   responseInProgress: false,
 
@@ -73,4 +76,7 @@ export const State = {
 
   /** Hash of the context the in-flight user turn leaves in its chat, or null for tool-result turns. */
   currentContextHash: null as string | null,
+
+  /** Reload the next chat even if the window already shows it (set after DeepSeek ignored a prompt). */
+  forceReload: false,
 };

@@ -46,6 +46,13 @@ export const MAX_REMEMBERED_CHATS = 200;
  */
 export const NAVIGATION_TIMEOUT_MS = 30_000;
 
+/**
+ * How long after typing a prompt DeepSeek must start replying. Past this the
+ * bridge presses Enter again once; past twice this it fails the request
+ * (and reloads the chat next time) instead of letting the client wait forever.
+ */
+export const SUBMIT_TIMEOUT_MS = 15_000;
+
 /** How many times to load a chat page before giving up, when loads fail (e.g. network blips). */
 export const NAVIGATION_ATTEMPTS = 3;
 

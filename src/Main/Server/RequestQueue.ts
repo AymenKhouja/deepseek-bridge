@@ -1,6 +1,6 @@
 import { BuildDeepSeekPrompt, ContextText } from '../DeepSeek/PromptBuilder';
 import { ContextAlreadySent, ContextHash, ConversationKey, KeyBase, OpenChat, TargetChatUrl } from '../DeepSeek/ChatRouter';
-import { DEEPSEEK_URL } from '../App/Constants';
+import { DEEPSEEK_URL, SUBMIT_TIMEOUT_MS } from '../App/Constants';
 import { FinishStream } from '../DeepSeek/StreamHandler';
 import { State } from '../App/State';
 
@@ -88,10 +88,22 @@ export function ProcessQueue(): void {
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
 
+  const request = State.pendingRequest;
+  const stillWaiting = () => State.pendingRequest === request && !State.streamStarted && !State.streamDone;
   const send = () => {
-    if (State.deepseekWindow && !State.deepseekWindow.isDestroyed()) {
-      State.deepseekWindow.webContents.send('bridge:send-prompt', userText);
-    }
+    if (!State.deepseekWindow || State.deepseekWindow.isDestroyed()) return;
+    State.streamStarted = false;
+    State.deepseekWindow.webContents.send('bridge:send-prompt', userText);
+    setTimeout(() => {
+      if (!stillWaiting()) return;
+      console.log('[bridge] DeepSeek has not started replying, pressing Enter again');
+      State.deepseekWindow?.webContents.send('bridge:resubmit');
+      setTimeout(() => {
+        if (!stillWaiting()) return;
+        State.forceReload = true;
+        FinishStream(`DeepSeek did not accept the prompt within ${(2 * SUBMIT_TIMEOUT_MS) / 1000}s; try again`);
+      }, SUBMIT_TIMEOUT_MS);
+    }, SUBMIT_TIMEOUT_MS);
   };
   const delay = built.kind === 'continuation' ? NextToolDelay() : 0;
   if (delay) console.log(`[bridge] tool-result delay ${delay}ms`);
