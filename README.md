@@ -4,9 +4,12 @@ A local OpenAI-compatible HTTP API that drives the real DeepSeek web UI in
 a hidden browser window. No API key. No credit top-ups. Just your DeepSeek
 account and an Electron window.
 
-Exposes `127.0.0.1:11435/v1` so any OpenAI-compatible client (OpenCode,
-Claude Code, any tool that speaks `/v1/chat/completions`) can use DeepSeek
-for free, with full tool-call support and DeepThink reasoning.
+Exposes `127.0.0.1:11435/v1` so any OpenAI-compatible client (OpenCode, or
+any tool that speaks `/v1/chat/completions`) can use DeepSeek for free, with
+full tool-call support and DeepThink reasoning.
+
+Claude Code speaks Anthropic's `/v1/messages` API, not OpenAI's, so it needs
+a translating proxy (e.g. claude-code-router or LiteLLM) in between.
 
 ## Why this exists
 
@@ -55,9 +58,13 @@ critical infrastructure on it.
 - Free DeepSeek access through the web UI (no API key required)
 - Full streaming support with proper SSE delta chunks
 - DeepThink reasoning content piped to `reasoning_content` in the delta
-- Tool-call loop: bash, read, write, grep, web_search, and more
-- Handles both `<bash>cmd</bash>` and `<tool_call>` JSON tag formats
+- Tool-call loop with any tools the client declares (the tool list is typed
+  into the prompt, since the web UI has no tools field)
+- Parses `<tool_call>` JSON, `<bash>cmd</bash>`-style tags, and DeepSeek's
+  native DSML format, including the mangled variants it produces in long
+  sessions; asks DeepSeek to re-send a call that can't be parsed
 - Catches bare shell commands when the model forgets tags
+- One DeepSeek chat per client conversation, remembered across restarts
 - Auto-enables DeepThink, auto-disables Search on every prompt
 - System tray icon, hides to background, reuses login session
 
@@ -71,14 +78,33 @@ npm run build
 npm start
 ```
 
-A DeepSeek window opens. Log in once, close it. The bridge runs in the
-background. Hit `http://127.0.0.1:11435/health` to confirm it's ready.
+A DeepSeek window opens. Log in once; when the chat box appears, the window
+hides itself to the tray and the bridge runs in the background. Check it's
+ready:
+
+```bash
+curl http://127.0.0.1:11435/health   # {"status":"ready","queue":0}
+```
+
+`"loading"` means the page isn't usable yet: look at the window for a login
+page, captcha or error.
+
+**Stopping:** Ctrl+C in the terminal that started it. Closing the window
+only hides it to the tray.
+
+**Debugging:** `BRIDGE_DEBUG=1` logs every line of DeepSeek's stream and the
+page's API calls to the terminal:
+
+```bash
+npm run build && BRIDGE_DEBUG=1 npx electron .
+```
 
 ## Tested with
 
 **[OpenCode](https://github.com/anthropics/opencode)** on macOS (Apple
-Silicon). Other OpenAI-compatible clients should work. If you test one and
-it does (or doesn't), open an issue.
+Silicon), and OpenCode 1.19 on Linux (WSL2, with WSLg showing the window).
+Other OpenAI-compatible clients should work. If you test one and it does (or
+doesn't), open an issue.
 
 ## Setup for OpenCode
 
@@ -104,6 +130,15 @@ Add to `~/.config/opencode/opencode.jsonc`:
 ```
 
 No API key needed. OpenCode sends one anyway; the bridge ignores it.
+
+The `"model"` line makes DeepSeek the default. Without it, pick it per
+session with `/models` inside OpenCode or `opencode -m deepseek/deepseek-chat`
+(`-m` takes `provider/model`, using the names in this config).
+
+OpenCode also reads Claude Code instruction files, including your global
+`~/.claude/CLAUDE.md`. If those don't suit DeepSeek, start OpenCode with
+`OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1` (skips the global file) or
+`OPENCODE_DISABLE_CLAUDE_CODE=1` (skips all of them).
 
 ## How it works
 
@@ -138,19 +173,58 @@ OpenCode renders in its thinking panel. Response text goes to
 
 ### Tool calls
 
-The model can invoke tools through XML-style tags. Both formats are
-supported:
+The web UI has no tools field, so on user turns the bridge types the
+request's `tools` (names, descriptions, JSON Schema parameters) into the
+prompt and asks for calls in this format:
 
 ```xml
-<bash>ls -la ~/Downloads</bash>
+<tool_call>{"name": "bash", "arguments": {"command": "ls -la"}}</tool_call>
 ```
 
-```xml
-<tool_call>{"id":"bash_1","type":"bash","command":"ls -la","description":"List files"}</tool_call>
+DeepSeek often answers in its own native format instead:
+
+```
+<｜｜DSML｜｜ calls>
+<｜｜DSML｜｜ invoke name="read">
+<｜｜DSML｜｜ parameter name="filePath" string="true">calc.py</｜｜DSML｜｜ parameter>
+</｜｜DSML｜｜ invoke>
+</｜｜DSML｜｜ calls>
 ```
 
-Tool results are fed back into the same conversation thread with randomized
-delays (4-7 seconds, never repeating) so follow-up turns look natural.
+That is parsed too, tolerantly: in long sessions DeepSeek drops `invoke`
+tags, uses single bars, leaves closers unnamed, or gets cut off mid-tag.
+Every DSML-looking tag is treated as a marker; a call without a tool name
+gets one from its argument names when exactly one declared tool fits. The
+older `<bash>cmd</bash>` tags still work.
+
+If a reply contains tool-call markup but nothing in it parses, the bridge
+doesn't pass the broken text on: it asks DeepSeek once, in the same chat,
+to re-send the call in `<tool_call>` format.
+
+Tool results are fed back into the same chat with randomized delays (4-7
+seconds, never repeating) so follow-up turns look natural.
+
+### Conversations
+
+Each client conversation gets its own DeepSeek chat. A conversation is
+identified by its first user message plus its first reply, and its chat
+URL is saved to `chat-map.json` in Electron's userData folder
+(`~/.config/deepseek-bridge/` on Linux; hashes only, no prompt text), so
+resumed sessions find their chat after a restart. A conversation the bridge
+has no chat for (e.g. one started on another model) is typed into a new
+chat as a transcript. Title-generation side requests get throwaway chats.
+
+The system prompt and tool list are re-typed only when they change, since
+the web chat can only append, never replace.
+
+### Reliability
+
+- If DeepSeek hasn't started replying 15s after a prompt is typed, Enter is
+  pressed again; after another 15s the request fails with an error instead
+  of hanging, and the next request reloads the chat.
+- If the client disconnects (e.g. you interrupt OpenCode), the bridge
+  aborts DeepSeek's reply and frees the queue, so a retry runs at once.
+- Failed chat page loads (e.g. network blips) are retried.
 
 ### Bare command fallback
 
@@ -197,9 +271,10 @@ src/
       TrayManager.ts      System tray icon and menu
     DeepSeek/           Model interaction
       DeepSeekWindow.ts   BrowserWindow + IPC handlers
+      ChatRouter.ts       Conversation -> DeepSeek chat routing
       PromptBuilder.ts    OpenAI messages to prompt string
-      StreamHandler.ts    SSE writing, flush, finish
-      ToolParser.ts       XML + tool_call tag parsing
+      StreamHandler.ts    SSE writing, flush, finish, tool-call repair
+      ToolParser.ts       tool_call, XML-tag and DSML parsing
     Server/             HTTP-facing
       ApiServer.ts        Express routes
       RequestQueue.ts     Serialized queue with delays
@@ -221,13 +296,13 @@ src/
 
 ## Limitations
 
-- Single conversation thread — switching projects without starting a new
-  chat on the DeepSeek side leaks context between them
-- Prompts are typed into a real textarea character by character; very long
-  prompts take a moment to submit
 - One request at a time — the queue is strictly serial
-- Only tested on macOS (Apple Silicon). Electron is cross-platform but
-  Linux and Windows are not verified
+- Tool calls depend on DeepSeek following a text format; long sessions make
+  its output sloppier, and a call that is still broken after one repair
+  attempt reaches the client as text
+- Two conversations with the same first message and an identical first
+  text reply can't be told apart
+- Tested on macOS (Apple Silicon) and Linux (WSL2); Windows is not verified
 
 ## License
 
