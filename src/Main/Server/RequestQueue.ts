@@ -1,4 +1,7 @@
-import { BuildDeepSeekPrompt } from '../DeepSeek/PromptBuilder';
+import { BuildDeepSeekPrompt, ContextText } from '../DeepSeek/PromptBuilder';
+import { ContextAlreadySent, ContextHash, ConversationKey, KeyBase, OpenChat, TargetChatUrl } from '../DeepSeek/ChatRouter';
+import { DEEPSEEK_URL, SUBMIT_TIMEOUT_MS } from '../App/Constants';
+import { FinishStream } from '../DeepSeek/StreamHandler';
 import { State } from '../App/State';
 
 /**
@@ -55,7 +58,13 @@ export function ProcessQueue(): void {
     }
   }
 
-  const built = BuildDeepSeekPrompt(messages);
+  const chatKey = ConversationKey(messages);
+  const target = TargetChatUrl(chatKey, messages);
+  const contextHash = ContextHash(ContextText(messages, tools));
+  const contextSent = ContextAlreadySent(chatKey, contextHash, target);
+
+  const built = BuildDeepSeekPrompt(messages, tools, !contextSent, target === DEEPSEEK_URL);
+  if (contextSent && built.kind === 'turn') console.log('[bridge] context unchanged, typing the new message only');
   const userText = built.text;
   if (!userText) {
     if (res.status) res.status(400).json({ error: 'empty' });
@@ -71,6 +80,9 @@ export function ProcessQueue(): void {
   State.emittedContent = '';
   State.firstDelta = true;
   State.streamDone = false;
+  State.streamStarted = false;
+  State.activeXhrSeq = -1; // ignore events from earlier streams, e.g. one aborted or cut off by a page load
+  State.repairTried = false;
   State.responseInProgress = true;
 
   res.setHeader('Content-Type', 'text/event-stream');
@@ -79,17 +91,70 @@ export function ProcessQueue(): void {
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
 
-  if (built.kind === 'continuation') {
-    const delay = NextToolDelay();
-    console.log(`[bridge] tool-result delay ${delay}ms`);
+  const request = State.pendingRequest;
+  const send = () => {
+    if (State.pendingRequest !== request) return; // cancelled while the chat was loading
+    TypePrompt(userText);
+  };
+  const delay = built.kind === 'continuation' ? NextToolDelay() : 0;
+  if (delay) console.log(`[bridge] tool-result delay ${delay}ms`);
+
+  State.currentChatKey = chatKey;
+  State.currentKeyBase = KeyBase(messages);
+  State.currentContextHash = ['fresh', 'turn', 'replay'].includes(built.kind) ? contextHash : null;
+  OpenChat(target)
+    .then(() => setTimeout(send, delay))
+    .catch((err: Error) => FinishStream(err.message));
+}
+
+/**
+ * Type a prompt for the in-flight request into DeepSeek and watch that it goes out.
+ *
+ * If no reply stream has started SUBMIT_TIMEOUT_MS after typing, Enter is
+ * pressed again; after another SUBMIT_TIMEOUT_MS the request fails (and the
+ * next one reloads the chat) instead of letting the client wait forever.
+ *
+ * @param text - The prompt to type.
+ */
+export function TypePrompt(text: string): void {
+  const request = State.pendingRequest;
+  if (!request || !State.deepseekWindow || State.deepseekWindow.isDestroyed()) return;
+  const stillWaiting = () => State.pendingRequest === request && !State.streamStarted && !State.streamDone;
+  State.streamStarted = false;
+  State.activeXhrSeq = -1;
+  State.deepseekWindow.webContents.send('bridge:send-prompt', text);
+  setTimeout(() => {
+    if (!stillWaiting()) return;
+    console.log('[bridge] DeepSeek has not started replying, pressing Enter again');
+    State.deepseekWindow?.webContents.send('bridge:resubmit');
     setTimeout(() => {
-      if (State.deepseekWindow && !State.deepseekWindow.isDestroyed()) {
-        State.deepseekWindow.webContents.send('bridge:send-prompt', userText);
-      }
-    }, delay);
-  } else {
-    State.deepseekWindow!.webContents.send('bridge:send-prompt', userText);
+      if (!stillWaiting()) return;
+      State.forceReload = true;
+      FinishStream(`DeepSeek did not accept the prompt within ${(2 * SUBMIT_TIMEOUT_MS) / 1000}s; try again`);
+    }, SUBMIT_TIMEOUT_MS);
+  }, SUBMIT_TIMEOUT_MS);
+}
+
+/**
+ * Cancel a request whose client disconnected (e.g. the user interrupted OpenCode).
+ *
+ * A queued request is dropped. The in-flight one has DeepSeek's reply
+ * aborted and is finished at once, so the client's retry runs next instead
+ * of waiting behind a reply nobody will read.
+ *
+ * @param id - The request's ID.
+ */
+export function CancelRequest(id: number): void {
+  const queued = State.requestQueue.findIndex(r => r.id === id);
+  if (queued !== -1) {
+    State.requestQueue.splice(queued, 1);
+    console.log(`[bridge] client left, dropped queued request ${id}`);
+    return;
   }
+  if (!State.pendingRequest || State.pendingRequest.id !== id) return;
+  console.log(`[bridge] client left, stopping request ${id}`);
+  if (State.deepseekWindow && !State.deepseekWindow.isDestroyed()) State.deepseekWindow.webContents.send('bridge:stop');
+  FinishStream('client disconnected');
 }
 
 /**

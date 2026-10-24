@@ -56,8 +56,8 @@ export interface OpenAiFunctionCall {
 export interface OpenAiToolDef {
   /** Always 'function'. */
   type: 'function';
-  /** The function descriptor with at minimum a name. */
-  function: { name: string };
+  /** The function descriptor: a name, plus an optional description and JSON Schema parameters. */
+  function: { name: string; description?: string; parameters?: Record<string, unknown> };
   /** Alternative field for the tool name (some clients send it here). */
   name?: string;
 }
@@ -95,6 +95,7 @@ export interface ParsedContent {
  * - 'continuation': tool results fed back after model requested tools
  * - 'fresh': first message in a conversation (system prompts + user)
  * - 'turn': subsequent user message in an ongoing conversation
+ * - 'replay': ongoing conversation typed into a new chat as a full transcript
  * - 'fallback': couldn't determine context, sending most recent user message
  * - 'empty': no usable prompt found (triggers a 400 error)
  */
@@ -102,7 +103,7 @@ export interface BuiltPrompt {
   /** The full text to type into the DeepSeek textarea. */
   text: string;
   /** Dispatch classification for the request queue. */
-  kind: 'continuation' | 'fresh' | 'turn' | 'fallback' | 'empty';
+  kind: 'continuation' | 'fresh' | 'turn' | 'replay' | 'fallback' | 'empty';
 }
 
 /**

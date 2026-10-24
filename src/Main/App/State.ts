@@ -14,6 +14,7 @@ import { QueuedRequest, StreamSink } from '../../Shared/Types';
  * - Stream: currentStreamRes, streamBuffer, streamTimer, streamDone,
  *           responseInProgress, fullResponseText, emittedContent, firstDelta
  * - Tools: currentAllowedTools, lastToolDelay
+ * - Chats: currentChatKey, currentKeyBase, currentContextHash
  */
 export const State = {
   /** The request currently being processed, or null if idle. */
@@ -43,6 +44,12 @@ export const State = {
   /** Whether the current stream has been finalized (stop, error, or tool_calls). */
   streamDone: false,
 
+  /** Whether DeepSeek started a reply stream for the in-flight prompt (see the submit watchdog in RequestQueue). */
+  streamStarted: false,
+
+  /** Number of the reply stream belonging to the in-flight request; events from other streams (e.g. an aborted one) are ignored. -1 until it starts. */
+  activeXhrSeq: -1,
+
   /** Whether a response is actively being streamed to the client. */
   responseInProgress: false,
 
@@ -63,4 +70,19 @@ export const State = {
 
   /** The last tool-result delay used, so the next one won't repeat. */
   lastToolDelay: 0,
+
+  /** Conversation key of the in-flight request, so its chat URL can be saved when it finishes. Null for new conversations. */
+  currentChatKey: null as string | null,
+
+  /** First user message of the in-flight request (null for one-off requests), to key a new conversation once its first reply is known. */
+  currentKeyBase: null as string | null,
+
+  /** Hash of the context the in-flight user turn leaves in its chat, or null for tool-result turns. */
+  currentContextHash: null as string | null,
+
+  /** Reload the next chat even if the window already shows it (set after DeepSeek ignored a prompt). */
+  forceReload: false,
+
+  /** Whether the in-flight request already asked DeepSeek to re-send a malformed tool call (only once per request). */
+  repairTried: false,
 };

@@ -33,3 +33,45 @@ export const TOOL_NAMES: Record<string, number> = {
   task: 1, todo: 1, todowrite: 1, todoread: 1, question: 1, skill: 1, lsp: 1,
   tool_call: 1,
 };
+/**
+ * How many conversation → DeepSeek chat mappings to keep.
+ * The least recently used one is forgotten past this; its next turn then
+ * stays in whatever chat is open.
+ */
+export const MAX_REMEMBERED_CHATS = 200;
+
+/**
+ * How long to wait for a DeepSeek chat page to load and become usable
+ * before failing the request (covers all retries).
+ */
+export const NAVIGATION_TIMEOUT_MS = 30_000;
+
+/**
+ * Typed into the chat when a reply tried to call a tool but nothing in it
+ * parsed (see FinishStream), so the model re-sends the call in a clean format
+ * instead of the client receiving broken markup as a final answer.
+ */
+export const TOOL_REPAIR_PROMPT = [
+  'Your last reply tried to call a tool, but the call was malformed and could not be run.',
+  'Re-send the same tool call(s) now, one tag per call, in exactly this format and nothing else:',
+  '<tool_call>{"name": "TOOL_NAME", "arguments": {"ARG": "VALUE"}}</tool_call>',
+].join('\n');
+
+/**
+ * How long after typing a prompt DeepSeek must start replying. Past this the
+ * bridge presses Enter again once; past twice this it fails the request
+ * (and reloads the chat next time) instead of letting the client wait forever.
+ */
+export const SUBMIT_TIMEOUT_MS = 15_000;
+
+/** How many times to load a chat page before giving up, when loads fail (e.g. network blips). */
+export const NAVIGATION_ATTEMPTS = 3;
+
+/** Pause before retrying a failed chat page load. */
+export const NAVIGATION_RETRY_DELAY_MS = 2000;
+
+/**
+ * File name, inside Electron's userData folder, of the saved
+ * conversation → DeepSeek chat map. Keys are hashes, so it holds no prompt text.
+ */
+export const CHAT_MAP_FILE = 'chat-map.json';

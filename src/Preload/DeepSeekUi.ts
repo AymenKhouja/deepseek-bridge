@@ -168,6 +168,20 @@ export async function SendPrompt(prompt: string, ipc: IpcRenderer): Promise<void
 }
 
 /**
+ * Press Enter again on a prompt DeepSeek didn't pick up.
+ *
+ * Called by the main process when no reply stream started after the first
+ * Enter. Does nothing if the textarea is empty (the prompt did go out).
+ */
+export function ResubmitPrompt(): void {
+  const ta = document.querySelector(TEXTAREA_SEL) as HTMLTextAreaElement | null;
+  if (!ta || !ta.value.trim()) return;
+  console.log('[preload] resubmitting prompt');
+  ta.focus();
+  SendEnter(ta);
+}
+
+/**
  * Wait for the DeepSeek chat UI to become ready and signal the main process.
  *
  * Called after the page loads. Attempts to find the chat textarea with a

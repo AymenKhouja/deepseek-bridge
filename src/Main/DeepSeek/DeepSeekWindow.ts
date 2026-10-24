@@ -86,8 +86,8 @@ export function RegisterIpcHandlers(): void {
     ProcessQueue();
   });
 
-  ipcMain.on('bridge:chunk', (_e, text: string) => {
-    if (!State.currentStreamRes || State.streamDone) return;
+  ipcMain.on('bridge:chunk', (_e, text: string, seq: number) => {
+    if (!State.currentStreamRes || State.streamDone || seq !== State.activeXhrSeq) return;
     State.fullResponseText += text;
     State.streamBuffer += text;
     if (!State.streamTimer) {
@@ -101,13 +101,15 @@ export function RegisterIpcHandlers(): void {
     }
   });
 
-  ipcMain.on('bridge:thinking', (_e, text: string) => {
-    if (!State.currentStreamRes || State.streamDone) return;
+  ipcMain.on('bridge:thinking', (_e, text: string, seq: number) => {
+    if (!State.currentStreamRes || State.streamDone || seq !== State.activeXhrSeq) return;
     EmitThinking(text);
   });
 
-  ipcMain.on('bridge:done', () => { FinishStream(); });
+  ipcMain.on('bridge:done', (_e, seq: number) => { if (seq === State.activeXhrSeq) FinishStream(); });
   ipcMain.on('bridge:error', (_e, err: string) => { FinishStream(err); });
+  ipcMain.on('bridge:started', (_e, seq: number) => { State.streamStarted = true; State.activeXhrSeq = seq; });
+  ipcMain.on('bridge:debug', (_e, line: string) => { console.log(`[bridge:debug] ${line}`); });
   ipcMain.on('bridge:diag', (_e, d: { rawLen: number; rawTail: string }) => {
     console.log(`[bridge:diag] rawLen=${d && d.rawLen} rawTail=${JSON.stringify(d && d.rawTail)}`);
   });

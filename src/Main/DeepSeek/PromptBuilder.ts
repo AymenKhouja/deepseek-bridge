@@ -1,5 +1,55 @@
-import { OpenAiMessage, OpenAiFunctionCall, BuiltPrompt } from '../../Shared/Types';
+import { OpenAiMessage, OpenAiFunctionCall, OpenAiToolDef, BuiltPrompt } from '../../Shared/Types';
 import { MAX_TOOL_RESULT_BYTES } from '../App/Constants';
+
+/**
+ * Check whether a system prompt is OpenCode's session-title generator.
+ *
+ * Title requests are one-off side requests: their system prompt is not
+ * typed into DeepSeek, and they never claim a conversation's chat.
+ *
+ * @param sys - System prompt text.
+ * @returns true for the title-generator prompt.
+ */
+export function IsTitleGenerator(sys: string): boolean {
+  return sys.includes('title generator') && sys.includes('Generate a title');
+}
+
+/**
+ * Describe the request's tools to the model in plain text.
+ *
+ * The real OpenAI API shows the `tools` array to the model server-side. The
+ * DeepSeek web UI has no such field, so the bridge must type the tool list
+ * into the prompt itself, along with the `<tool_call>` format ParseToolCalls
+ * understands. The JSON shape works for any tool name, unlike bare tags.
+ *
+ * @param tools - Tool definitions from the request, or null.
+ * @returns The tool instructions, or '' when there are no tools.
+ *
+ * @example
+ * FormatToolDefs([{ type: 'function', function: { name: 'get_weather', description: 'Weather for a city' } }])
+ * // => 'You have access to these tools:\n\n- get_weather: Weather for a city\n...'
+ */
+export function FormatToolDefs(tools: OpenAiToolDef[] | null): string {
+  if (!Array.isArray(tools) || tools.length === 0) return '';
+  const lines: string[] = [];
+  for (const tool of tools) {
+    const fn = tool.function || ({} as OpenAiToolDef['function']);
+    const name = fn.name || tool.name;
+    if (!name) continue;
+    let line = `- ${name}`;
+    if (fn.description) line += `: ${fn.description}`;
+    if (fn.parameters) line += `\n  Parameters (JSON Schema): ${JSON.stringify(fn.parameters)}`;
+    lines.push(line);
+  }
+  if (lines.length === 0) return '';
+  return [
+    'You have access to these tools:',
+    lines.join('\n'),
+    'To call a tool, reply with one tag per call in exactly this format, with the arguments as a JSON object matching the schema:',
+    '<tool_call>{"name": "TOOL_NAME", "arguments": {"ARG": "VALUE"}}</tool_call>',
+    'After the tag, stop and wait: the tool output will be sent to you in the next message. Only call tools from this list. If no tool is needed, answer in plain text with no tags.',
+  ].join('\n\n');
+}
 
 /**
  * Extract the plain text content from an OpenAI message.
@@ -18,7 +68,7 @@ import { MAX_TOOL_RESULT_BYTES } from '../App/Constants';
  * ContentOf({ role: 'user', content: [{ type: 'text', text: 'hi' }] })
  * // => 'hi'
  */
-function ContentOf(msg: OpenAiMessage): string {
+export function ContentOf(msg: OpenAiMessage): string {
   const c = msg.content;
   if (typeof c === 'string') return c;
   if (Array.isArray(c)) {
@@ -30,6 +80,66 @@ function ContentOf(msg: OpenAiMessage): string {
     return parts.join('\n');
   }
   return '';
+}
+
+/**
+ * Build the context typed before a user message: the system prompts (minus
+ * OpenCode's title-generator prompt) followed by the tool list.
+ *
+ * @param messages - Full array of OpenAI messages in chronological order.
+ * @param tools - Tool definitions from the request, or null.
+ * @returns The context text, or '' when there is none.
+ */
+export function ContextText(messages: OpenAiMessage[], tools: OpenAiToolDef[] | null): string {
+  const parts: string[] = [];
+  for (const msg of messages) {
+    if (msg.role !== 'system') continue;
+    const sys = ContentOf(msg);
+    if (sys && !IsTitleGenerator(sys)) parts.push(sys);
+  }
+  parts.push(FormatToolDefs(tools));
+  return parts.filter(p => p).join('\n\n');
+}
+
+/**
+ * Type an ongoing conversation into a new, empty chat as one transcript.
+ *
+ * Used when the bridge has no chat for a conversation that already has
+ * replies: it started on another model, or its chat was forgotten. Normal
+ * turns type only the newest message because the chat holds the rest;
+ * here the chat holds nothing, so everything is typed once.
+ *
+ * @param messages - Full array of OpenAI messages in chronological order.
+ * @param tools - Tool definitions from the request, or null.
+ * @returns The context, the transcript, and an instruction to continue.
+ */
+export function ReplayPrompt(messages: OpenAiMessage[], tools: OpenAiToolDef[] | null): string {
+  const lines: string[] = [];
+  for (const msg of messages) {
+    if (msg.role === 'user') {
+      lines.push(`User: ${ContentOf(msg)}`);
+    } else if (msg.role === 'assistant') {
+      const text = ContentOf(msg);
+      if (text) lines.push(`Assistant: ${text}`);
+      for (const tc of msg.tool_calls || []) {
+        lines.push(`Assistant called tool: ${tc.function.name}(${tc.function.arguments || ''})`);
+      }
+    } else if (msg.role === 'tool') {
+      let res = ContentOf(msg) || '(no output)';
+      if (Buffer.byteLength(res, 'utf8') > MAX_TOOL_RESULT_BYTES) res = '(result too large, omitted)';
+      lines.push(`Tool result: ${res}`);
+    }
+  }
+  const lastRole = messages[messages.length - 1].role;
+  const next = lastRole === 'tool'
+    ? 'Continue from the last tool result.'
+    : 'Reply to the last user message.';
+  return [
+    ContextText(messages, tools),
+    'This conversation started elsewhere. Here it is so far:',
+    lines.join('\n\n'),
+    `${next} If you need a tool, use the tool format described above.`,
+  ].filter(p => p).join('\n\n');
 }
 
 /**
@@ -50,13 +160,22 @@ function ContentOf(msg: OpenAiMessage): string {
  *
  * - **last = user, ongoing**: The web thread already holds the conversation
  *   history. Type the current system prompts (which may have been updated
- *   by agentic IDEs like Cursor or Cline) followed by the new user question.
+ *   by agentic IDEs like Cursor or Cline) followed by the new user question,
+ *   or just the question when includeContext is false.
  *
  * - **fallback**: The last message is something unexpected (e.g., assistant
  *   with no trailing tool result). Scan backward for the most recent user
  *   message and send that.
  *
+ * On user turns, the request's tool list (if any) is typed after the system
+ * prompts, so the model knows which tools exist and how to call them.
+ *
  * @param messages - Full array of OpenAI messages in chronological order.
+ * @param tools - Tool definitions from the request, or null.
+ * @param includeContext - Type the system prompts and tool list on user turns.
+ *   False when this exact context is already in the DeepSeek chat (see ChatRouter).
+ * @param newChat - The prompt goes into a new, empty chat. An ongoing
+ *   conversation is then typed as a full transcript (see ReplayPrompt).
  * @returns A BuiltPrompt with the text to type and a kind tag.
  *
  * @example
@@ -66,7 +185,12 @@ function ContentOf(msg: OpenAiMessage): string {
  * ])
  * // => { text: 'You are helpful.\n\nWhat is 2+2?', kind: 'fresh' }
  */
-export function BuildDeepSeekPrompt(messages: OpenAiMessage[]): BuiltPrompt {
+export function BuildDeepSeekPrompt(
+  messages: OpenAiMessage[],
+  tools: OpenAiToolDef[] | null = null,
+  includeContext = true,
+  newChat = false,
+): BuiltPrompt {
   const lastIdx = messages.length - 1;
   const last = messages[lastIdx] || ({} as OpenAiMessage);
   const lastRole = last.role || '';
@@ -76,6 +200,10 @@ export function BuildDeepSeekPrompt(messages: OpenAiMessage[]): BuiltPrompt {
   for (const msg of messages) {
     if (msg.role === 'assistant') hasAssistant = true;
     if (msg.role === 'tool') hasTool = true;
+  }
+
+  if (newChat && (hasAssistant || hasTool) && (lastRole === 'user' || lastRole === 'tool')) {
+    return { text: ReplayPrompt(messages, tools), kind: 'replay' };
   }
 
   if (lastRole === 'tool') {
@@ -109,14 +237,7 @@ export function BuildDeepSeekPrompt(messages: OpenAiMessage[]): BuiltPrompt {
 
   if (lastRole === 'user') {
     const userText = ContentOf(last);
-    const head: string[] = [];
-    for (const msg of messages) {
-      if (msg.role !== 'system') continue;
-      const sys = ContentOf(msg);
-      if (sys && !(sys.includes('title generator') && sys.includes('Generate a title'))) {
-        head.push(sys);
-      }
-    }
+    const head = includeContext ? [ContextText(messages, tools)] : [];
     head.push(userText);
     const text = head.filter(p => p).join('\n\n');
     if (!hasAssistant && !hasTool) return { text, kind: 'fresh' };

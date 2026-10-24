@@ -79,6 +79,23 @@ type DeepSeekSSEPayload =
  * @example
  * InstallXhrPatch(ipcRenderer);
  */
+/** Number of the latest chat stream, sent with its events so the main process can ignore older ones. */
+let xhrSeq = 0;
+
+/** The latest chat stream, so it can be aborted when the client gives up. */
+let activeXhr: XMLHttpRequest | null = null;
+
+/**
+ * Abort DeepSeek's reply in progress (the client disconnected).
+ * Aborting fires neither 'load' nor 'error', so no bridge:done is sent.
+ */
+export function AbortActiveChat(): void {
+  if (!activeXhr) return;
+  console.log('[xhr-patch] aborting reply in progress');
+  activeXhr.abort();
+  activeXhr = null;
+}
+
 export function InstallXhrPatch(ipc: IpcRenderer): void {
   const OrigXHR = (window as unknown as Record<string, unknown>).XMLHttpRequest as typeof XMLHttpRequest;
 
@@ -118,6 +135,9 @@ export function InstallXhrPatch(ipc: IpcRenderer): void {
       activeFragmentType = 'RESPONSE';
       currentEvent = '';
       console.log('[xhr-patch] send on chat URL, adding listeners');
+      const seq = ++xhrSeq;
+      activeXhr = xhr;
+      ipc.send('bridge:started', seq);
 
       xhr.addEventListener('progress', () => {
         const raw = xhr.responseText || '';
@@ -194,19 +214,22 @@ export function InstallXhrPatch(ipc: IpcRenderer): void {
               }
             }
 
-            if (thinking) ipc.send('bridge:thinking', thinking);
-            if (content) ipc.send('bridge:chunk', content);
+            if (thinking) ipc.send('bridge:thinking', thinking, seq);
+            if (content) ipc.send('bridge:chunk', content, seq);
+            if (process.env.BRIDGE_DEBUG) ipc.send('bridge:debug', `${currentEvent}|${activeFragmentType}|c=${content.length}|t=${thinking.length}|${payload.slice(0, 300)}`);
           } catch (_) { }
         }
       });
 
       xhr.addEventListener('load', () => {
         console.log('[xhr-patch] load, sending bridge:done');
-        ipc.send('bridge:done');
+        if (activeXhr === xhr) activeXhr = null;
+        ipc.send('bridge:done', seq);
       });
 
       xhr.addEventListener('error', () => {
-        ipc.send('bridge:done');
+        if (activeXhr === xhr) activeXhr = null;
+        ipc.send('bridge:done', seq);
       });
 
       origSend(body);
