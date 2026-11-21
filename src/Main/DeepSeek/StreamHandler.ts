@@ -166,6 +166,7 @@ export function FinishStream(error?: string): void {
     State.responseInProgress = true;
     State.fullResponseText = '';
     State.streamBuffer = '';
+    State.thinkingText = '';
     TypePrompt(TOOL_REPAIR_PROMPT);
     return;
   }
