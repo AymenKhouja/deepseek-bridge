@@ -103,10 +103,21 @@ export function RegisterIpcHandlers(): void {
 
   ipcMain.on('bridge:thinking', (_e, text: string, seq: number) => {
     if (!State.currentStreamRes || State.streamDone || seq !== State.activeXhrSeq) return;
+    State.thinkingText += text;
     EmitThinking(text);
   });
 
   ipcMain.on('bridge:done', (_e, seq: number) => { if (seq === State.activeXhrSeq) FinishStream(); });
+  ipcMain.on('bridge:recovered', (_e, seq: number, thinking: string, content: string) => {
+    if (!State.currentStreamRes || State.streamDone || seq !== State.activeXhrSeq) return;
+    console.log(`[bridge] reply recovered from history (thinking ${thinking.length}, content ${content.length})`);
+    if (thinking.startsWith(State.thinkingText)) EmitThinking(thinking.slice(State.thinkingText.length));
+    // The stream may have delivered part of the reply already; keep what was
+    // sent to the client and finish with the full text.
+    State.fullResponseText = content;
+    State.streamBuffer = content.startsWith(State.emittedContent) ? content.slice(State.emittedContent.length) : '';
+    FinishStream();
+  });
   ipcMain.on('bridge:error', (_e, err: string) => { FinishStream(err); });
   ipcMain.on('bridge:started', (_e, seq: number) => { State.streamStarted = true; State.activeXhrSeq = seq; });
   ipcMain.on('bridge:debug', (_e, line: string) => { console.log(`[bridge:debug] ${line}`); });

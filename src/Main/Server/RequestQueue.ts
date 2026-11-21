@@ -83,6 +83,7 @@ export function ProcessQueue(): void {
   State.streamStarted = false;
   State.activeXhrSeq = -1; // ignore events from earlier streams, e.g. one aborted or cut off by a page load
   State.repairTried = false;
+  State.thinkingText = '';
   State.responseInProgress = true;
 
   res.setHeader('Content-Type', 'text/event-stream');

@@ -56,6 +56,9 @@ export const State = {
   /** Complete accumulated text from the model for the current request. */
   fullResponseText: '',
 
+  /** Thinking text received for the in-flight request, so a reply recovered from history only adds what's missing. */
+  thinkingText: '',
+
   /** Total text content already emitted as delta chunks to the client. */
   emittedContent: '',
 
